@@ -134,8 +134,7 @@ async def extract_playlist(url: str):
     ydl_opts = {
         'extract_flat': True, 
         'quiet': True, 
-        'no_warnings': True,
-        'extractor_args': {'youtube': {'client': ['ANDROID', 'IOS']}}
+        'no_warnings': True
     }
     if os.path.exists('cookies.txt'):
         ydl_opts['cookiefile'] = 'cookies.txt'
@@ -340,8 +339,7 @@ def get_audio_url(youtube_url: str) -> str:
         'quiet': True,
         'no_warnings': True,
         'noplaylist': True,
-        'youtube_include_dash_manifest': False,
-        'extractor_args': {'youtube': {'client': ['ANDROID', 'IOS']}}
+        'youtube_include_dash_manifest': False
     }
     if os.path.exists('cookies.txt'):
         ydl_opts['cookiefile'] = 'cookies.txt'
