@@ -131,7 +131,12 @@ def get_history(current_user: User = Depends(get_current_user), db: Session = De
 async def extract_playlist(url: str):
     if not url:
         raise HTTPException(status_code=400, detail="URL is required")
-    ydl_opts = {'extract_flat': True, 'quiet': True, 'no_warnings': True}
+    ydl_opts = {
+        'extract_flat': True, 
+        'quiet': True, 
+        'no_warnings': True,
+        'extractor_args': {'youtube': {'client': ['ANDROID', 'IOS']}}
+    }
     def extract():
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             return ydl.extract_info(url, download=False)
@@ -334,6 +339,7 @@ def get_audio_url(youtube_url: str) -> str:
         'no_warnings': True,
         'noplaylist': True,
         'youtube_include_dash_manifest': False,
+        'extractor_args': {'youtube': {'client': ['ANDROID', 'IOS']}}
     }
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:

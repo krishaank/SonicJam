@@ -313,12 +313,22 @@ function App() {
       const data = await res.json();
       
       if (data.is_playlist) {
-        setQueue(prev => [...prev, ...data.tracks.slice(1)]); // Add to queue
-        const firstTrack = data.tracks[0];
-        executePlay(firstTrack.url, firstTrack.title);
+        if (data.tracks && data.tracks.length > 0) {
+          setQueue(prev => [...prev, ...data.tracks.slice(1)]); // Add to queue
+          const firstTrack = data.tracks[0];
+          executePlay(firstTrack.url, firstTrack.title);
+        } else {
+          setError("Could not read playlist. It might be private or empty.");
+          setIsLoading(false);
+        }
       } else {
-        const track = data.tracks[0];
-        executePlay(track.url, track.title);
+        if (data.tracks && data.tracks.length > 0) {
+          const track = data.tracks[0];
+          executePlay(track.url, track.title);
+        } else {
+          setError("Could not find any playable tracks.");
+          setIsLoading(false);
+        }
       }
     } catch (err) {
       setError("Failed to load track or playlist.");
