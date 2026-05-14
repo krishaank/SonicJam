@@ -134,7 +134,9 @@ async def extract_playlist(url: str):
     ydl_opts = {
         'extract_flat': True, 
         'quiet': True, 
-        'no_warnings': True
+        'no_warnings': True,
+        'format': 'bestaudio/best',
+        'ignoreerrors': True
     }
     if os.path.exists('cookies.txt'):
         ydl_opts['cookiefile'] = 'cookies.txt'
