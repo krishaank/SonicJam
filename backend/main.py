@@ -132,11 +132,12 @@ async def extract_playlist(url: str):
     if not url:
         raise HTTPException(status_code=400, detail="URL is required")
     ydl_opts = {
-        'extract_flat': True, 
+        'extract_flat': 'in_playlist', 
         'quiet': True, 
         'no_warnings': True,
         'format': 'bestaudio/best',
-        'ignoreerrors': True
+        'ignoreerrors': True,
+        'extractor_args': {'youtube': {'client': ['ANDROID_MUSIC', 'TV', 'WEB', 'IOS']}}
     }
     if os.path.exists('cookies.txt'):
         ydl_opts['cookiefile'] = 'cookies.txt'
@@ -341,7 +342,8 @@ def get_audio_url(youtube_url: str) -> str:
         'quiet': True,
         'no_warnings': True,
         'noplaylist': True,
-        'youtube_include_dash_manifest': False
+        'youtube_include_dash_manifest': False,
+        'extractor_args': {'youtube': {'client': ['ANDROID_MUSIC', 'TV', 'WEB', 'IOS']}}
     }
     if os.path.exists('cookies.txt'):
         ydl_opts['cookiefile'] = 'cookies.txt'
