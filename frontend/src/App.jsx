@@ -196,7 +196,7 @@ function App() {
         case 'load_url':
           playStream(data.url, true);
           logHistory(data.url, data.title);
-          addSystemMessage(`${usernames[data.client_id] || 'User ' + data.client_id.substring(0,4)} dropped a new track!`);
+          addSystemMessage(`${data.username || 'User ' + data.client_id.substring(0,4)} dropped a new track!`);
           break;
         case 'play':
           audioRef.current?.play()

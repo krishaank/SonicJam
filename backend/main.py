@@ -293,7 +293,13 @@ class ConnectionManager:
             room.current_url = message.get("url")
             room.current_title = message.get("title", "Unknown Track")
             room.is_playing = True
-            await room.broadcast({"type": "load_url", "url": room.current_url, "title": room.current_title, "client_id": client_id})
+            await room.broadcast({
+                "type": "load_url", 
+                "url": room.current_url, 
+                "title": room.current_title, 
+                "client_id": client_id,
+                "username": room.usernames.get(client_id)
+            })
         elif msg_type == "play":
             room.is_playing = True
             await room.broadcast({"type": "play", "client_id": client_id})
