@@ -108,6 +108,16 @@ function App() {
     }
   };
 
+  const updateSharedQueue = (action) => {
+    setQueue(prev => {
+      const nextQueue = typeof action === 'function' ? action(prev) : action;
+      if (ws?.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'update_queue', queue: nextQueue }));
+      }
+      return nextQueue;
+    });
+  };
+
   // Sync local volume state to the audio element
   useEffect(() => {
     if (audioRef.current) {
@@ -125,7 +135,7 @@ function App() {
       // Only the DJ/Host triggers the next song for the room
       if (hasPermission && queue.length > 0) {
         const nextTrack = queue[0];
-        setQueue(prev => prev.slice(1));
+        updateSharedQueue(prev => prev.slice(1));
         if (ws?.readyState === WebSocket.OPEN) {
            ws.send(JSON.stringify({ type: 'load_url', url: nextTrack.url, title: nextTrack.title }));
         }
@@ -169,9 +179,13 @@ function App() {
           setAuthorizedUsers(data.authorized_users);
           setUsers(data.users);
           setUsernames(data.usernames || {});
+          setQueue(data.queue || []);
           if (data.current_url) {
              playStream(data.current_url, data.is_playing);
           }
+          break;
+        case 'update_queue':
+          setQueue(data.queue || []);
           break;
         case 'user_joined':
           setUsers(data.users);
@@ -314,7 +328,7 @@ function App() {
       
       if (data.is_playlist) {
         if (data.tracks && data.tracks.length > 0) {
-          setQueue(prev => [...prev, ...data.tracks.slice(1)]); // Add to queue
+          updateSharedQueue(data.tracks.slice(1)); // Replace queue
           const firstTrack = data.tracks[0];
           executePlay(firstTrack.url, firstTrack.title);
         } else {
@@ -426,7 +440,7 @@ function App() {
                 autoFocus
                 onBlur={() => setTimeout(() => setIsEditingRoom(false), 150)}
               />
-              <button type="submit" className="copy-btn">Go</button>
+              <button type="submit" className="copy-btn" onMouseDown={(e) => e.preventDefault()}>Go</button>
             </form>
           ) : (
             <>
@@ -454,7 +468,7 @@ function App() {
       {/* Left Sidebar Queue */}
       <ProfileQueue 
         queue={queue} 
-        setQueue={setQueue} 
+        setQueue={updateSharedQueue} 
         history={history} 
         fetchHistory={fetchHistory} 
         playTrack={executePlay}

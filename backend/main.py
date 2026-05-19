@@ -182,6 +182,7 @@ class Room:
         self.current_title: str = "Unknown Track"
         self.is_playing: bool = False
         self.usernames: Dict[str, str] = {}
+        self.queue: list = []
         
     async def broadcast(self, message: dict):
         for connection in self.connections.values():
@@ -218,7 +219,8 @@ class ConnectionManager:
             "is_playing": room.is_playing,
             "users_count": len(room.connections),
             "users": list(room.connections.keys()),
-            "usernames": room.usernames
+            "usernames": room.usernames,
+            "queue": room.queue
         }))
         await room.broadcast({
             "type": "user_joined",
@@ -288,6 +290,11 @@ class ConnectionManager:
 
         if client_id not in room.authorized_users:
             return 
+            
+        if msg_type == "update_queue":
+            room.queue = message.get("queue", [])
+            await room.broadcast({"type": "update_queue", "queue": room.queue})
+            return
             
         if msg_type == "load_url":
             room.current_url = message.get("url")
