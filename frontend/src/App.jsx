@@ -1,12 +1,14 @@
 import { useState, useRef, useEffect } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls, Stars } from '@react-three/drei';
-import { Play, Pause, Search, Copy, Volume2, VolumeX, User } from 'lucide-react';
+import { Play, Pause, Search, Copy, Volume2, VolumeX, User, Mic2 } from 'lucide-react';
 import Visualizer from './components/Visualizer';
 import Chat from './components/Chat';
 import AuthModal from './components/AuthModal';
 import ProfileQueue from './components/ProfileQueue';
 import LandingPage from './components/LandingPage';
+import LyricsOverlay from './components/LyricsOverlay';
+
 
 // Generate a random client ID and room ID
 const generateId = () => Math.random().toString(36).substring(2, 9);
@@ -22,6 +24,11 @@ function App() {
   const [volume, setVolume] = useState(1);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+
+  // Lyrics State
+  const [showLyrics, setShowLyrics] = useState(false);
+  const [lyricsData, setLyricsData] = useState([]);
+  const [currentTitle, setCurrentTitle] = useState('');
   
   // Room Join State
   const [isEditingRoom, setIsEditingRoom] = useState(false);
@@ -108,6 +115,48 @@ function App() {
     }
   };
 
+  const parseLrc = (lrcString) => {
+    if (!lrcString) return [];
+    const lines = lrcString.split('\n');
+    const parsed = [];
+    const timeRegex = /\[(\d{2}):(\d{2})\.(\d{2,3})\]/;
+    for (const line of lines) {
+      const match = line.match(timeRegex);
+      if (match) {
+        const min = parseInt(match[1]);
+        const sec = parseInt(match[2]);
+        const ms = parseInt(match[3]);
+        const time = min * 60 + sec + (ms / (match[3].length === 2 ? 100 : 1000));
+        const text = line.replace(timeRegex, '').trim();
+        parsed.push({ time, text });
+      }
+    }
+    return parsed;
+  };
+
+  const fetchLyrics = async (title) => {
+    if (!title) return;
+    try {
+      setLyricsData([]);
+      const query = encodeURIComponent(title);
+      const res = await fetch(`https://lrclib.net/api/search?q=${query}`);
+      const data = await res.json();
+      if (data && data.length > 0) {
+        const item = data.find(d => d.syncedLyrics) || data[0];
+        if (item && item.syncedLyrics) {
+          setLyricsData(parseLrc(item.syncedLyrics));
+        }
+      }
+    } catch (e) {
+      console.error("Lyrics fetch failed", e);
+    }
+  };
+
+  useEffect(() => {
+    if (currentTitle) fetchLyrics(currentTitle);
+  }, [currentTitle]);
+
+
   const updateSharedQueue = (action) => {
     setQueue(prev => {
       const nextQueue = typeof action === 'function' ? action(prev) : action;
@@ -180,6 +229,7 @@ function App() {
           setUsers(data.users);
           setUsernames(data.usernames || {});
           setQueue(data.queue || []);
+          if (data.current_title) setCurrentTitle(data.current_title);
           if (data.current_url) {
              playStream(data.current_url, data.is_playing);
           }
@@ -202,12 +252,17 @@ function App() {
           addSystemMessage(`${data.leaving_username || 'User ' + data.client_id.substring(0,4)} left.`);
           break;
         case 'chat':
-          setMessages(prev => [...prev, { sender: data.client_id, text: data.text }]);
+          setMessages(prev => [...prev, { 
+            sender: data.client_id, 
+            text: data.text,
+            isSystem: data.client_id === 'system'
+          }]);
           break;
         case 'permission_updated':
           setAuthorizedUsers(data.authorized_users);
           break;
         case 'load_url':
+          setCurrentTitle(data.title);
           playStream(data.url, true);
           logHistory(data.url, data.title);
           addSystemMessage(`${data.username || 'User ' + data.client_id.substring(0,4)} dropped a new track!`);
@@ -410,6 +465,18 @@ function App() {
     );
   }
 
+  const handleDedicate = (trackUrl, trackTitle, targetUsername) => {
+    if (!hasPermission) return;
+    executePlay(trackUrl, trackTitle);
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({
+        type: 'dedication',
+        target: targetUsername,
+        title: trackTitle || "Unknown Track"
+      }));
+    }
+  };
+
   return (
     <div className="app-container">
       {showAuthModal && <AuthModal onClose={() => setShowAuthModal(false)} onLoginSuccess={handleLoginSuccess} />}
@@ -424,6 +491,13 @@ function App() {
           <OrbitControls enableZoom={false} autoRotate autoRotateSpeed={0.5} />
         </Canvas>
       </div>
+
+      <LyricsOverlay 
+        lyricsData={lyricsData} 
+        currentTime={currentTime} 
+        isVisible={showLyrics} 
+        onClose={() => setShowLyrics(false)} 
+      />
 
       <audio ref={audioRef} crossOrigin="anonymous" />
 
@@ -473,6 +547,9 @@ function App() {
         fetchHistory={fetchHistory} 
         playTrack={executePlay}
         hasPermission={hasPermission}
+        users={users}
+        usernames={usernames}
+        onDedicate={handleDedicate}
       />
 
       <header className="top-bar">
@@ -480,7 +557,7 @@ function App() {
           <input 
             type="text" 
             className="search-input"
-            placeholder={hasPermission ? "Paste YouTube Video or Playlist URL..." : "Only DJs can change the music..."} 
+            placeholder={hasPermission ? "Paste a SoundCloud, Bandcamp, JioSaavn, or YouTube URL..." : "Only DJs can change the music..."} 
             value={url}
             onChange={(e) => setUrl(e.target.value)}
             disabled={!hasPermission}
@@ -518,6 +595,14 @@ function App() {
           </div>
 
           <div className="player-controls">
+            <button 
+              className={`control-btn ${showLyrics ? 'active-lyrics' : ''}`} 
+              onClick={() => setShowLyrics(!showLyrics)}
+              title="Toggle Karaoke Mode"
+            >
+              <Mic2 size={20} color={showLyrics ? 'var(--primary)' : 'currentColor'} />
+            </button>
+
             <button 
               className={`control-btn main ${!hasPermission ? 'disabled' : ''}`} 
               onClick={togglePlay}

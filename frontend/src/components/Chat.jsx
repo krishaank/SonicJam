@@ -84,7 +84,7 @@ export default function Chat({
         {messages.map((msg, idx) => (
           <div 
             key={idx} 
-            className={`message ${msg.isSystem ? 'system' : msg.sender === clientId ? 'own' : 'other'}`}
+            className={`message ${msg.isSystem ? 'system' : msg.sender === clientId ? 'own' : 'other'} ${msg.isSystem && msg.text.includes('dedicated') ? 'dedication' : ''}`}
           >
             {!msg.isSystem && msg.sender !== clientId && (
               <span className="sender-id">{usernames[msg.sender] || `User ${msg.sender.substring(0,4)}`}</span>

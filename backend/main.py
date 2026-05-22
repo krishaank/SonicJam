@@ -295,6 +295,18 @@ class ConnectionManager:
             room.queue = message.get("queue", [])
             await room.broadcast({"type": "update_queue", "queue": room.queue})
             return
+
+        if msg_type == "dedication":
+            target = message.get("target")
+            title = message.get("title")
+            sender = room.usernames.get(client_id, f"User {client_id[:4]}")
+            # Broadcast as a system chat message
+            await room.broadcast({
+                "type": "chat",
+                "client_id": "system",
+                "text": f"🎁 {sender} dedicated '{title}' to {target} 💝!"
+            })
+            return
             
         if msg_type == "load_url":
             room.current_url = message.get("url")
