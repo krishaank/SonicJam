@@ -29,7 +29,9 @@ export default function LyricsOverlay({ lyricsData, currentTime, isVisible, onCl
     if (isVisible && activeIndex >= 0 && containerRef.current) {
       const activeElement = containerRef.current.querySelector('.lyric-line.active');
       if (activeElement) {
-        activeElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        const container = containerRef.current;
+        const scrollTarget = activeElement.offsetTop - (container.clientHeight / 2) + (activeElement.clientHeight / 2);
+        container.scrollTo({ top: scrollTarget, behavior: 'smooth' });
       }
     }
   }, [activeIndex, isVisible]);
