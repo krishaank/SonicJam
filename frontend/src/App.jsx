@@ -37,6 +37,7 @@ function App() {
   
   // Mobile UI State
   const [mobileView, setMobileView] = useState('none'); // 'none' | 'chat' | 'queue'
+  const [showProfileMenu, setShowProfileMenu] = useState(false);
 
   // Auth & DB State
   const [token, setToken] = useState(localStorage.getItem('sonic_token'));
@@ -548,10 +549,31 @@ function App() {
         </div>
       </div>
 
-      <button className="login-trigger-btn" onClick={() => token ? handleLogout() : setShowAuthModal(true)}>
-        <User size={18} />
-        {token ? `Logout ${username}` : 'Login / Register'}
-      </button>
+      <div style={{ position: 'absolute', top: '15px', left: '15px', zIndex: 50 }}>
+        <button 
+          className="login-trigger-btn" 
+          onClick={() => token ? setShowProfileMenu(!showProfileMenu) : setShowAuthModal(true)}
+          style={{ width: '40px', height: '40px', padding: 0, borderRadius: '50%', display: 'flex', justifyContent: 'center', alignItems: 'center' }}
+          title={token ? `Profile (${username})` : 'Login / Register'}
+        >
+          <User size={18} />
+        </button>
+        {showProfileMenu && token && (
+          <div className="dedicate-dropdown glass-panel" style={{ top: '100%', left: 0, marginTop: '10px', minWidth: '160px' }}>
+            <div className="dropdown-users">
+              <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', padding: '5px 10px', display: 'block', textAlign: 'center', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
+                Signed in as <br/><b style={{color: 'var(--text-primary)', display: 'block', marginTop: '4px'}}>{username}</b>
+              </span>
+              <button 
+                onClick={() => { handleLogout(); setShowProfileMenu(false); }} 
+                style={{ color: '#ff4444', textAlign: 'center', marginTop: '5px', display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '10px' }}
+              >
+                Logout
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
 
       {/* Left Sidebar Queue */}
       <ProfileQueue 

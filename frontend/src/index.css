@@ -835,28 +835,27 @@ body {
   border-color: var(--accent);
 }
 
+/* Login & Profile */
 .login-trigger-btn {
-  position: absolute;
-  bottom: 20px;
-  left: 20px;
-  background: rgba(0, 0, 0, 0.4);
+  background: var(--panel-bg);
   backdrop-filter: blur(16px);
   border: 1px solid var(--panel-border);
-  color: white;
-  padding: 10px 20px;
-  border-radius: 20px;
+  color: var(--text-primary);
+  border-radius: 50%;
+  cursor: pointer;
+  z-index: 50;
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 8px;
-  cursor: pointer;
-  transition: all 0.2s;
-  z-index: 20;
+  font-family: inherit;
+  transition: all 0.2s ease;
 }
 
 .login-trigger-btn:hover {
-  background: var(--accent);
-  color: black;
+  background: rgba(255, 255, 255, 0.1);
   border-color: var(--accent);
+  color: var(--accent);
 }
 
 .loading-overlay {
@@ -1274,17 +1273,6 @@ body {
 
   .room-badge {
     padding: 6px 12px;
-  }
-
-  /* Move Login Button */
-  .login-trigger-btn {
-    top: 10px;
-    left: 10px;
-    bottom: auto;
-    transform: none;
-    padding: 8px 12px;
-    font-size: 0.85rem;
-    z-index: 50;
   }
 
   /* Player Bar adjustments */
