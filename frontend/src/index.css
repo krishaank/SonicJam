@@ -370,6 +370,58 @@ body {
   border-top: 1px solid var(--panel-border);
   display: flex;
   gap: 10px;
+  align-items: center;
+}
+
+.emoji-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.2s;
+  padding: 0;
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  box-sizing: border-box;
+}
+
+.emoji-btn:hover {
+  color: var(--accent);
+}
+
+.emoji-picker {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  margin-bottom: 10px;
+  background: rgba(20, 20, 25, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  padding: 10px;
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 5px;
+  z-index: 100;
+  box-shadow: 0 -5px 20px rgba(0,0,0,0.5);
+}
+
+.emoji-item {
+  background: transparent;
+  border: none;
+  font-size: 1.2rem;
+  padding: 5px;
+  cursor: pointer;
+  border-radius: 6px;
+  transition: transform 0.2s, background 0.2s;
+}
+
+.emoji-item:hover {
+  background: rgba(255,255,255,0.1);
+  transform: scale(1.2);
 }
 
 .chat-input {
@@ -378,9 +430,12 @@ body {
   border: 1px solid var(--panel-border);
   color: var(--text-primary);
   border-radius: 20px;
-  padding: 10px 15px;
+  padding: 0 15px;
   outline: none;
   font-family: inherit;
+  height: 40px;
+  box-sizing: border-box;
+  min-width: 0;
 }
 
 .chat-input:focus {
@@ -399,6 +454,8 @@ body {
   justify-content: center;
   cursor: pointer;
   opacity: 1;
+  flex-shrink: 0;
+  box-sizing: border-box;
 }
 
 .send-btn:disabled {
@@ -1170,4 +1227,123 @@ body {
   color: rgba(255, 255, 255, 0.4);
   text-align: center;
   padding: 5px;
+}
+
+/* ==========================================================================
+   Mobile Responsiveness (max-width: 768px)
+   ========================================================================== */
+
+/* Hide mobile toggle buttons on desktop by default */
+.mobile-toggle-btn {
+  display: none !important;
+}
+
+@media (max-width: 768px) {
+  
+  /* Show mobile toggles */
+  .mobile-toggle-btn {
+    display: flex !important;
+  }
+
+  /* Adjust Top Navigation & Search */
+  .top-bar {
+    padding: 70px 10px 10px 10px;
+  }
+
+  .search-form {
+    gap: 8px;
+  }
+
+  .search-input {
+    padding: 12px 16px;
+    font-size: 0.85rem;
+  }
+
+  .play-btn {
+    padding: 0 16px;
+  }
+
+  .top-left-badges {
+    top: 10px;
+    left: 50%;
+    transform: translateX(-50%) scale(0.85);
+    align-items: center;
+    flex-direction: row;
+    width: max-content;
+  }
+
+  .room-badge {
+    padding: 6px 12px;
+  }
+
+  /* Move Login Button */
+  .login-trigger-btn {
+    bottom: 120px;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 8px 16px;
+    font-size: 0.85rem;
+  }
+
+  /* Player Bar adjustments */
+  .player-bar {
+    width: 95%;
+    bottom: 10px;
+  }
+
+  .player-wrapper {
+    padding: 10px;
+  }
+
+  .player-controls {
+    gap: 8px;
+  }
+  
+  .control-btn {
+    padding: 8px;
+  }
+
+  .volume-control {
+    display: none; /* Hide volume control on mobile (users use physical buttons) */
+  }
+
+  /* Modals */
+  .auth-modal, .landing-modal {
+    width: 95%;
+    padding: 2rem 1.5rem;
+  }
+
+  /* Hide Sidebars by default on mobile, make them overlay when active */
+  .chat-container, .profile-queue-container {
+    display: none;
+    position: absolute;
+    width: 100%;
+    max-width: none;
+    left: 0;
+    right: 0;
+    bottom: 160px; /* Above the player bar and login button */
+    top: auto;
+    height: calc(100vh - 250px);
+    z-index: 100;
+    border-radius: 20px 20px 0 0;
+    background: rgba(10, 10, 15, 0.98);
+  }
+
+  .chat-container.mobile-active, .profile-queue-container.mobile-active {
+    display: flex;
+  }
+
+  /* Lyrics Overlay */
+  .lyrics-overlay {
+    padding: 60px 10px;
+  }
+
+  .lyric-line {
+    font-size: 1.1rem;
+    padding: 15px 0;
+  }
+
+  .lyric-line.active {
+    font-size: 1.3rem;
+  }
 }

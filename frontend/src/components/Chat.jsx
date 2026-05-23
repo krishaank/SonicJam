@@ -1,5 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
-import { Send, Users, Shield, ShieldOff } from 'lucide-react';
+import { Send, Users, Shield, ShieldOff, Smile } from 'lucide-react';
+
+const JAM_EMOJIS = ['🔥', '💯', '🎵', '🎸', '🎤', '😂', '❤️', '🎶', '🕺', '💃', '🎧', '🔊', '🎉', '🚀', '💎', '🍿', '👏', '🙌', '🤘', '👑'];
 
 export default function Chat({ 
   messages, 
@@ -10,10 +12,12 @@ export default function Chat({
   hostId, 
   authorizedUsers, 
   grantPermission, 
-  revokePermission 
+  revokePermission,
+  className = ''
 }) {
   const [inputText, setInputText] = useState('');
   const [showUsers, setShowUsers] = useState(false);
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const messagesEndRef = useRef(null);
 
   // Auto-scroll to bottom
@@ -26,12 +30,13 @@ export default function Chat({
     if (!inputText.trim()) return;
     sendMessage(inputText.trim());
     setInputText('');
+    setShowEmojiPicker(false);
   };
 
   const isHost = clientId === hostId;
 
   return (
-    <div className="chat-container glass-panel">
+    <div className={`chat-container glass-panel ${className}`}>
       {/* Header */}
       <div className="chat-header">
         <h3>Live Jam Chat</h3>
@@ -96,7 +101,24 @@ export default function Chat({
       </div>
 
       {/* Input Area */}
-      <form onSubmit={handleSubmit} className="chat-input-form">
+      <form onSubmit={handleSubmit} className="chat-input-form" style={{ position: 'relative' }}>
+        {showEmojiPicker && (
+          <div className="emoji-picker glass-panel">
+            {JAM_EMOJIS.map(e => (
+              <button 
+                type="button" 
+                key={e} 
+                className="emoji-item"
+                onClick={() => { setInputText(prev => prev + e); setShowEmojiPicker(false); }}
+              >
+                {e}
+              </button>
+            ))}
+          </div>
+        )}
+        <button type="button" className="emoji-btn" onClick={() => setShowEmojiPicker(!showEmojiPicker)}>
+          <Smile size={18} color={showEmojiPicker ? 'var(--primary)' : 'currentColor'} />
+        </button>
         <input
           type="text"
           value={inputText}

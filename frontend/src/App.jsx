@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls, Stars } from '@react-three/drei';
-import { Play, Pause, Search, Copy, Volume2, VolumeX, User, Mic2 } from 'lucide-react';
+import { Play, Pause, Search, Copy, Volume2, VolumeX, User, Mic2, Heart, X, MessageCircle, ListMusic } from 'lucide-react';
 import Visualizer from './components/Visualizer';
 import Chat from './components/Chat';
 import AuthModal from './components/AuthModal';
@@ -33,6 +33,10 @@ function App() {
   // Room Join State
   const [isEditingRoom, setIsEditingRoom] = useState(false);
   const [joinRoomInput, setJoinRoomInput] = useState('');
+  const [bottomDedicateOpen, setBottomDedicateOpen] = useState(false);
+  
+  // Mobile UI State
+  const [mobileView, setMobileView] = useState('none'); // 'none' | 'chat' | 'queue'
 
   // Auth & DB State
   const [token, setToken] = useState(localStorage.getItem('sonic_token'));
@@ -381,23 +385,24 @@ function App() {
       const res = await fetch(`${BACKEND_URL}/api/playlist?url=${encodeURIComponent(url)}`);
       const data = await res.json();
       
+      let trackToPlay = null;
       if (data.is_playlist) {
         if (data.tracks && data.tracks.length > 0) {
           updateSharedQueue(data.tracks.slice(1)); // Replace queue
-          const firstTrack = data.tracks[0];
-          executePlay(firstTrack.url, firstTrack.title);
+          trackToPlay = data.tracks[0];
         } else {
           setError("Could not read playlist. It might be private or empty.");
-          setIsLoading(false);
         }
       } else {
         if (data.tracks && data.tracks.length > 0) {
-          const track = data.tracks[0];
-          executePlay(track.url, track.title);
+          trackToPlay = data.tracks[0];
         } else {
           setError("Could not find any playable tracks.");
-          setIsLoading(false);
         }
+      }
+      
+      if (trackToPlay) {
+         executePlay(trackToPlay.url, trackToPlay.title);
       }
     } catch (err) {
       setError("Failed to load track or playlist.");
@@ -405,6 +410,15 @@ function App() {
       setIsLoading(false);
       setUrl('');
     }
+  };
+
+  const handleCurrentSongDedicate = (targetUserId) => {
+    if (!hasPermission || !currentTitle) return;
+    const targetUsername = usernames[targetUserId] || `User ${targetUserId.substring(0,4)}`;
+    if (ws?.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'dedication', target: targetUsername, title: currentTitle }));
+    }
+    setBottomDedicateOpen(false);
   };
 
   const togglePlay = () => {
@@ -550,6 +564,7 @@ function App() {
         users={users}
         usernames={usernames}
         onDedicate={handleDedicate}
+        className={mobileView === 'queue' ? 'mobile-active' : ''}
       />
 
       <header className="top-bar">
@@ -562,9 +577,11 @@ function App() {
             onChange={(e) => setUrl(e.target.value)}
             disabled={!hasPermission}
           />
-          <button type="submit" className="play-btn" disabled={isLoading || !hasPermission}>
-            {isLoading ? <div className="loader"></div> : <Search size={20} />}
-          </button>
+          <div style={{ display: 'flex', gap: '8px', position: 'relative' }}>
+            <button type="submit" className="play-btn" disabled={isLoading || !hasPermission}>
+              {isLoading ? <div className="loader"></div> : <Search size={20} />}
+            </button>
+          </div>
         </form>
       </header>
       
@@ -596,6 +613,14 @@ function App() {
 
           <div className="player-controls">
             <button 
+              className={`control-btn mobile-toggle-btn ${mobileView === 'queue' ? 'active-lyrics' : ''}`}
+              onClick={() => setMobileView(mobileView === 'queue' ? 'none' : 'queue')}
+              title="Toggle Queue"
+            >
+              <ListMusic size={20} color={mobileView === 'queue' ? 'var(--primary)' : 'currentColor'} />
+            </button>
+
+            <button 
               className={`control-btn ${showLyrics ? 'active-lyrics' : ''}`} 
               onClick={() => setShowLyrics(!showLyrics)}
               title="Toggle Karaoke Mode"
@@ -621,6 +646,43 @@ function App() {
                 className="volume-slider"
               />
             </div>
+
+            {hasPermission && currentTitle && (
+              <div style={{ position: 'relative', display: 'flex' }}>
+                <button 
+                  className={`control-btn ${bottomDedicateOpen ? 'active-lyrics' : ''}`} 
+                  onClick={() => setBottomDedicateOpen(!bottomDedicateOpen)}
+                  title="Dedicate current song"
+                >
+                  <Heart size={20} color={bottomDedicateOpen ? 'var(--primary)' : 'currentColor'} />
+                </button>
+                
+                {bottomDedicateOpen && (
+                  <div className="dedicate-dropdown glass-panel" style={{ bottom: '100%', top: 'auto', right: 0, marginBottom: '15px' }}>
+                    <div className="dropdown-header">
+                      <span>Dedicate to:</span>
+                      <button type="button" className="close-btn" onClick={() => setBottomDedicateOpen(false)}><X size={12}/></button>
+                    </div>
+                    <div className="dropdown-users">
+                      {users.length === 0 ? <span className="no-users">No other users</span> : null}
+                      {users.map(u => (
+                        <button type="button" key={u} onClick={() => handleCurrentSongDedicate(u)}>
+                          {usernames[u] || `User ${u.substring(0,4)}`}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            <button 
+              className={`control-btn mobile-toggle-btn ${mobileView === 'chat' ? 'active-lyrics' : ''}`}
+              onClick={() => setMobileView(mobileView === 'chat' ? 'none' : 'chat')}
+              title="Toggle Chat"
+            >
+              <MessageCircle size={20} color={mobileView === 'chat' ? 'var(--primary)' : 'currentColor'} />
+            </button>
           </div>
         </div>
       </footer>
@@ -635,6 +697,7 @@ function App() {
         authorizedUsers={authorizedUsers}
         grantPermission={(id) => ws?.send(JSON.stringify({ type: 'grant_permission', target_id: id }))}
         revokePermission={(id) => ws?.send(JSON.stringify({ type: 'revoke_permission', target_id: id }))}
+        className={mobileView === 'chat' ? 'mobile-active' : ''}
       />
     </div>
   );

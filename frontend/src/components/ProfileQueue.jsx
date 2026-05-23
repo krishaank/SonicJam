@@ -1,7 +1,18 @@
 import { useState, useEffect } from 'react';
 import { ListMusic, History, Play, Trash2, Heart, X } from 'lucide-react';
 
-export default function ProfileQueue({ queue, setQueue, history, fetchHistory, playTrack, hasPermission, users, usernames, onDedicate }) {
+export default function ProfileQueue({ 
+  queue, 
+  setQueue, 
+  history, 
+  fetchHistory, 
+  playTrack, 
+  hasPermission,
+  users,
+  usernames,
+  onDedicate,
+  className = ''
+}) {
   const [activeTab, setActiveTab] = useState('queue');
   const [dedicateTarget, setDedicateTarget] = useState(null); // { idx, type }
 
@@ -61,7 +72,7 @@ export default function ProfileQueue({ queue, setQueue, history, fetchHistory, p
   };
 
   return (
-    <div className="profile-queue-container glass-panel">
+    <div className={`profile-queue-container glass-panel ${className}`}>
       <div className="tabs">
         <button 
           className={`tab-btn ${activeTab === 'queue' ? 'active' : ''}`}
