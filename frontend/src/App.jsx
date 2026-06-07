@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls, Stars } from '@react-three/drei';
 import { Play, Pause, Search, Copy, Volume2, VolumeX, User } from 'lucide-react';
@@ -14,6 +14,9 @@ const generateId = () => Math.random().toString(36).substring(2, 9);
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
 const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:8000';
 
+// How many seconds before the end of a track to begin the crossfade
+const CROSSFADE_DURATION = 5; // seconds
+
 function App() {
   const [url, setUrl] = useState('');
   const [isPlaying, setIsPlaying] = useState(false);
@@ -22,7 +25,8 @@ function App() {
   const [volume, setVolume] = useState(1);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
-  
+  const [isCrossfading, setIsCrossfading] = useState(false);
+
   // Room Join State
   const [isEditingRoom, setIsEditingRoom] = useState(false);
   const [joinRoomInput, setJoinRoomInput] = useState('');
@@ -33,7 +37,7 @@ function App() {
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [queue, setQueue] = useState([]);
   const [history, setHistory] = useState([]);
-  
+
   // App Entry State
   const [hasEntered, setHasEntered] = useState(!!localStorage.getItem('sonic_token'));
 
@@ -47,15 +51,58 @@ function App() {
   const [hostId, setHostId] = useState(null);
   const [authorizedUsers, setAuthorizedUsers] = useState([]);
 
-  const audioRef = useRef(null);
+  // --- Audio Refs ---
+  // Two audio elements for crossfading (A/B swap pattern)
+  const audioRef = useRef(null);   // Currently playing ("deck A")
+  const audioRef2 = useRef(null);  // Preloading next track ("deck B")
+
+  // Web Audio API refs
   const audioContextRef = useRef(null);
   const analyzerRef = useRef(null);
-  const sourceRef = useRef(null);
+
+  // Each audio element gets its own GainNode for independent volume control
+  const gainNode1Ref = useRef(null); // Gain for audioRef  (deck A)
+  const gainNode2Ref = useRef(null); // Gain for audioRef2 (deck B)
+
+  // MediaElementSourceNode — created once per audio element, never recreated
+  const source1Ref = useRef(null);
+  const source2Ref = useRef(null);
+
+  // Tracks whether a crossfade has already been triggered for the current track
+  // Prevents re-triggering as timeupdate fires many times in the fade window
+  const crossfadeTriggeredRef = useRef(false);
+
+  // Ref mirror of queue for use inside event listeners without stale closures
+  const queueRef = useRef([]);
+
+  // Ref mirror of ws for use inside event listeners
+  const wsRef = useRef(null);
 
   // Check if current user has control permissions
   const hasPermission = authorizedUsers.includes(clientId);
+  const hasPermissionRef = useRef(hasPermission);
+  useEffect(() => { hasPermissionRef.current = hasPermission; }, [hasPermission]);
 
-  // Handle Auth Success
+  // Keep queueRef in sync with queue state
+  useEffect(() => { queueRef.current = queue; }, [queue]);
+
+  // Keep wsRef in sync with ws state
+  useEffect(() => { wsRef.current = ws; }, [ws]);
+
+  // Sync local volume state to BOTH audio elements
+  useEffect(() => {
+    // We control perceived volume via the GainNodes, but keep the
+    // HTML element volume at 1 so the GainNode is the single source of truth.
+    // We only apply the UI volume slider to the active gain node.
+    if (gainNode1Ref.current) {
+      // Only set if deck A is not in the middle of a crossfade ramp
+      if (!isCrossfading) {
+        gainNode1Ref.current.gain.value = volume;
+      }
+    }
+  }, [volume, isCrossfading]);
+
+  // --- Auth & History ---
   const handleLoginSuccess = (newToken, newUsername) => {
     setToken(newToken);
     setUsername(newUsername);
@@ -74,7 +121,6 @@ function App() {
     setHistory([]);
   };
 
-  // Fetch History
   const fetchHistory = async (currentToken = token) => {
     if (!currentToken) return;
     try {
@@ -90,7 +136,6 @@ function App() {
     }
   };
 
-  // Log to History
   const logHistory = async (trackUrl, trackTitle) => {
     if (!token) return;
     try {
@@ -102,51 +147,194 @@ function App() {
         },
         body: JSON.stringify({ url: trackUrl, title: trackTitle || 'Unknown Track' })
       });
-      fetchHistory(); // refresh history after logging
+      fetchHistory();
     } catch (e) {
       console.error('Failed to log history', e);
     }
   };
 
-  // Sync local volume state to the audio element
-  useEffect(() => {
-    if (audioRef.current) {
-      audioRef.current.volume = volume;
+  // --- Web Audio Init ---
+  // Sets up AudioContext, Analyzer, and TWO GainNodes — one per deck.
+  // Safe to call multiple times; idempotent after first call.
+  const initAudio = useCallback(() => {
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+
+    if (!audioContextRef.current) {
+      audioContextRef.current = new AudioContext();
+
+      // Single shared analyzer — both decks feed into it
+      analyzerRef.current = audioContextRef.current.createAnalyser();
+      analyzerRef.current.fftSize = 256;
+      analyzerRef.current.smoothingTimeConstant = 0.8;
+      analyzerRef.current.connect(audioContextRef.current.destination);
+
+      // Gain node for deck A (audioRef)
+      gainNode1Ref.current = audioContextRef.current.createGain();
+      gainNode1Ref.current.gain.value = volume;
+      gainNode1Ref.current.connect(analyzerRef.current);
+
+      // Gain node for deck B (audioRef2)
+      gainNode2Ref.current = audioContextRef.current.createGain();
+      gainNode2Ref.current.gain.value = 0; // starts silent
+      gainNode2Ref.current.connect(analyzerRef.current);
+    }
+
+    // Wire deck A source (created only once)
+    if (!source1Ref.current && audioRef.current) {
+      source1Ref.current = audioContextRef.current.createMediaElementSource(audioRef.current);
+      source1Ref.current.connect(gainNode1Ref.current);
+    }
+
+    // Wire deck B source (created only once)
+    if (!source2Ref.current && audioRef2.current) {
+      source2Ref.current = audioContextRef.current.createMediaElementSource(audioRef2.current);
+      source2Ref.current.connect(gainNode2Ref.current);
+    }
+
+    if (audioContextRef.current.state === 'suspended') {
+      audioContextRef.current.resume();
     }
   }, [volume]);
 
-  // Auto-play next in queue and sync time
+  // --- Crossfade Logic ---
+  // Called when deck A is near its end and there's a next track in the queue.
+  // Ramps deck A gain to 0 and deck B gain to `volume` over CROSSFADE_DURATION seconds,
+  // then swaps the deck A/B roles by swapping the src attributes.
+  const triggerCrossfade = useCallback((nextTrackUrl, nextTrackTitle) => {
+    const ctx = audioContextRef.current;
+    const gainA = gainNode1Ref.current;
+    const gainB = gainNode2Ref.current;
+    const deckB = audioRef2.current;
+
+    if (!ctx || !gainA || !gainB || !deckB) return;
+
+    setIsCrossfading(true);
+
+    // Preload next track on deck B and start it silently
+    const streamEndpoint = `${BACKEND_URL}/api/stream?url=${encodeURIComponent(nextTrackUrl)}`;
+    deckB.src = streamEndpoint;
+    deckB.load();
+
+    deckB.play().catch(e => console.warn('Deck B autoplay blocked:', e));
+
+    // Schedule the gain ramp using Web Audio API's built-in linear ramp
+    // This is sample-accurate and doesn't cause audio glitches unlike setInterval
+    const now = ctx.currentTime;
+    const fadeEnd = now + CROSSFADE_DURATION;
+
+    // Fade out deck A
+    gainA.gain.cancelScheduledValues(now);
+    gainA.gain.setValueAtTime(gainA.gain.value, now);
+    gainA.gain.linearRampToValueAtTime(0, fadeEnd);
+
+    // Fade in deck B
+    gainB.gain.cancelScheduledValues(now);
+    gainB.gain.setValueAtTime(0, now);
+    gainB.gain.linearRampToValueAtTime(volume, fadeEnd);
+
+    // After the crossfade completes, make deck B the new deck A
+    setTimeout(() => {
+      const deckA = audioRef.current;
+      if (deckA) {
+        deckA.pause();
+        deckA.src = '';
+      }
+
+      // Swap: copy deck B's src onto deck A, reset deck B
+      if (audioRef.current && audioRef2.current) {
+        audioRef.current.src = audioRef2.current.src;
+        audioRef2.current.src = '';
+      }
+
+      // Reset gains: deck A is now the active deck, deck B is silent standby
+      gainA.gain.cancelScheduledValues(ctx.currentTime);
+      gainA.gain.setValueAtTime(volume, ctx.currentTime);
+      gainB.gain.cancelScheduledValues(ctx.currentTime);
+      gainB.gain.setValueAtTime(0, ctx.currentTime);
+
+      // Reset trigger guard for the new track
+      crossfadeTriggeredRef.current = false;
+      setIsCrossfading(false);
+      setIsPlaying(true);
+
+      // Log history for the new track
+      logHistory(nextTrackUrl, nextTrackTitle);
+      addSystemMessage(`🎛️ Crossfaded into next track!`);
+
+    }, CROSSFADE_DURATION * 1000);
+  }, [volume]);
+
+  // --- Auto-play next in queue + crossfade trigger ---
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
-    
+
+    // Fires when deck A ends naturally (fallback if crossfade didn't trigger)
     const handleEnded = () => {
       setIsPlaying(false);
-      // Only the DJ/Host triggers the next song for the room
-      if (hasPermission && queue.length > 0) {
-        const nextTrack = queue[0];
+      crossfadeTriggeredRef.current = false;
+      if (hasPermissionRef.current && queueRef.current.length > 0) {
+        const nextTrack = queueRef.current[0];
         setQueue(prev => prev.slice(1));
-        if (ws?.readyState === WebSocket.OPEN) {
-           ws.send(JSON.stringify({ type: 'load_url', url: nextTrack.url, title: nextTrack.title }));
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({ type: 'load_url', url: nextTrack.url, title: nextTrack.title }));
         }
       }
     };
 
-    const updateTime = () => setCurrentTime(audio.currentTime);
+    // Fires continuously — we watch for the crossfade window
+    const handleTimeUpdate = () => {
+      const timeLeft = audio.duration - audio.currentTime;
+      setCurrentTime(audio.currentTime);
+
+      // Trigger crossfade if:
+      // 1. We're the host (hasPermission)
+      // 2. There's a next track in the queue
+      // 3. We're within the crossfade window
+      // 4. We haven't already triggered it for this track
+      if (
+        hasPermissionRef.current &&
+        queueRef.current.length > 0 &&
+        !isNaN(audio.duration) &&
+        audio.duration > 0 &&
+        timeLeft <= CROSSFADE_DURATION &&
+        timeLeft > 0 &&
+        !crossfadeTriggeredRef.current
+      ) {
+        crossfadeTriggeredRef.current = true;
+
+        const nextTrack = queueRef.current[0];
+        // Remove from queue state immediately so UI updates
+        setQueue(prev => prev.slice(1));
+
+        // Broadcast to room that next track is loading
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({
+            type: 'load_url',
+            url: nextTrack.url,
+            title: nextTrack.title
+          }));
+        }
+
+        // Trigger local crossfade for the host
+        triggerCrossfade(nextTrack.url, nextTrack.title);
+      }
+    };
+
     const updateDuration = () => setDuration(audio.duration);
-    
+
     audio.addEventListener('ended', handleEnded);
-    audio.addEventListener('timeupdate', updateTime);
+    audio.addEventListener('timeupdate', handleTimeUpdate);
     audio.addEventListener('loadedmetadata', updateDuration);
-    
+
     return () => {
       audio.removeEventListener('ended', handleEnded);
-      audio.removeEventListener('timeupdate', updateTime);
+      audio.removeEventListener('timeupdate', handleTimeUpdate);
       audio.removeEventListener('loadedmetadata', updateDuration);
     };
-  }, [queue, hasPermission, ws]);
+  }, [triggerCrossfade]);
 
-  // Initialize Room and WebSocket
+  // --- WebSocket / Room Init ---
   useEffect(() => {
     if (!hasEntered) return;
 
@@ -159,10 +347,10 @@ function App() {
     setRoomId(room);
 
     const websocket = new WebSocket(`${WS_URL}/ws/${room}/${clientId}?username=${encodeURIComponent(username || '')}`);
-    
+
     websocket.onmessage = (event) => {
       const data = JSON.parse(event.data);
-      
+
       switch (data.type) {
         case 'room_state':
           setHostId(data.host_id);
@@ -170,14 +358,14 @@ function App() {
           setUsers(data.users);
           setUsernames(data.usernames || {});
           if (data.current_url) {
-             playStream(data.current_url, data.is_playing);
+            playStream(data.current_url, data.is_playing);
           }
           break;
         case 'user_joined':
           setUsers(data.users);
           setUsernames(data.usernames || {});
           if (data.client_id !== clientId) {
-             addSystemMessage(`${data.usernames?.[data.client_id] || 'User ' + data.client_id.substring(0,4)} joined the jam.`);
+            addSystemMessage(`${data.usernames?.[data.client_id] || 'User ' + data.client_id.substring(0, 4)} joined the jam.`);
           }
           break;
         case 'user_left':
@@ -185,7 +373,7 @@ function App() {
           setUsernames(data.usernames || {});
           setHostId(data.host_id);
           setAuthorizedUsers(data.authorized_users);
-          addSystemMessage(`${data.leaving_username || 'User ' + data.client_id.substring(0,4)} left.`);
+          addSystemMessage(`${data.leaving_username || 'User ' + data.client_id.substring(0, 4)} left.`);
           break;
         case 'chat':
           setMessages(prev => [...prev, { sender: data.client_id, text: data.text }]);
@@ -194,9 +382,10 @@ function App() {
           setAuthorizedUsers(data.authorized_users);
           break;
         case 'load_url':
+          // Non-hosts receive load_url and play the track directly (no crossfade, just sync)
           playStream(data.url, true);
           logHistory(data.url, data.title);
-          addSystemMessage(`${usernames[data.client_id] || 'User ' + data.client_id.substring(0,4)} dropped a new track!`);
+          addSystemMessage(`${data.usernames?.[data.client_id] || 'User ' + data.client_id?.substring(0, 4)} dropped a new track!`);
           break;
         case 'play':
           audioRef.current?.play()
@@ -220,9 +409,9 @@ function App() {
     return () => {
       websocket.close();
     };
-  }, [clientId, hasEntered]); // Re-run when hasEntered becomes true
+  }, [clientId, hasEntered]);
 
-  // Broadcast profile update when username changes without reconnecting
+  // Broadcast profile update when username changes
   useEffect(() => {
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'update_profile', username }));
@@ -239,38 +428,24 @@ function App() {
     }
   };
 
-  const initAudio = () => {
-    if (!audioContextRef.current) {
-      const AudioContext = window.AudioContext || window.webkitAudioContext;
-      audioContextRef.current = new AudioContext();
-      analyzerRef.current = audioContextRef.current.createAnalyser();
-      analyzerRef.current.fftSize = 256;
-      analyzerRef.current.smoothingTimeConstant = 0.8;
-      
-      if (audioRef.current) {
-        sourceRef.current = audioContextRef.current.createMediaElementSource(audioRef.current);
-        sourceRef.current.connect(analyzerRef.current);
-        analyzerRef.current.connect(audioContextRef.current.destination);
-      }
-    }
-    
-    if (audioContextRef.current.state === 'suspended') {
-      audioContextRef.current.resume();
-    }
-  };
-
+  // --- Stream Playback ---
+  // Used for guests (non-hosts) receiving load_url, and for initial room_state sync.
+  // Does NOT crossfade — just loads directly onto deck A.
   const playStream = async (streamUrl, startPlaying = true) => {
     setError('');
     setIsLoading(true);
     initAudio();
 
+    // Reset crossfade guard when a new track is loaded externally
+    crossfadeTriggeredRef.current = false;
+
     try {
       const streamEndpoint = `${BACKEND_URL}/api/stream?url=${encodeURIComponent(streamUrl)}`;
-      
+
       if (audioRef.current) {
         audioRef.current.src = streamEndpoint;
         audioRef.current.load();
-        
+
         if (startPlaying) {
           const playPromise = audioRef.current.play();
           if (playPromise !== undefined) {
@@ -296,7 +471,6 @@ function App() {
     }
   };
 
-  // Play Playlist or Track directly
   const executePlay = (trackUrl, trackTitle) => {
     if (ws?.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'load_url', url: trackUrl, title: trackTitle }));
@@ -306,15 +480,15 @@ function App() {
   const handleSearchSubmit = async (e) => {
     e?.preventDefault();
     if (!url || !hasPermission) return;
-    
+
     setIsLoading(true);
     try {
       const res = await fetch(`${BACKEND_URL}/api/playlist?url=${encodeURIComponent(url)}`);
       const data = await res.json();
-      
+
       if (data.is_playlist) {
         if (data.tracks && data.tracks.length > 0) {
-          setQueue(prev => [...prev, ...data.tracks.slice(1)]); // Add to queue
+          setQueue(prev => [...prev, ...data.tracks.slice(1)]);
           const firstTrack = data.tracks[0];
           executePlay(firstTrack.url, firstTrack.title);
         } else {
@@ -340,7 +514,7 @@ function App() {
 
   const togglePlay = () => {
     if (!audioRef.current || !audioRef.current.src) return;
-    
+
     if (hasPermission) {
       if (isPlaying) {
         ws?.send(JSON.stringify({ type: 'pause' }));
@@ -349,7 +523,6 @@ function App() {
         ws?.send(JSON.stringify({ type: 'play' }));
       }
     } else {
-      // Local toggle for guests
       if (isPlaying) {
         audioRef.current.pause();
         setIsPlaying(false);
@@ -366,8 +539,9 @@ function App() {
       audioRef.current.currentTime = time;
     }
     setCurrentTime(time);
-    
-    // Broadcast seek if host
+    // Reset crossfade guard on manual seek (user might scrub back)
+    crossfadeTriggeredRef.current = false;
+
     if (hasPermission && ws?.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'seek', time }));
     }
@@ -389,9 +563,9 @@ function App() {
 
   if (!hasEntered) {
     return (
-      <LandingPage 
-        onLoginSuccess={handleLoginSuccess} 
-        onEnterGuest={() => setHasEntered(true)} 
+      <LandingPage
+        onLoginSuccess={handleLoginSuccess}
+        onEnterGuest={() => setHasEntered(true)}
       />
     );
   }
@@ -411,16 +585,18 @@ function App() {
         </Canvas>
       </div>
 
+      {/* Two audio elements — deck A (active) and deck B (crossfade preload) */}
       <audio ref={audioRef} crossOrigin="anonymous" />
+      <audio ref={audioRef2} crossOrigin="anonymous" />
 
       {/* Top Left Badges */}
       <div className="top-left-badges">
         <div className="room-badge glass-panel">
           {isEditingRoom ? (
             <form onSubmit={handleJoinRoom} className="join-room-form">
-              <input 
-                type="text" 
-                placeholder="Enter Room ID" 
+              <input
+                type="text"
+                placeholder="Enter Room ID"
                 value={joinRoomInput}
                 onChange={(e) => setJoinRoomInput(e.target.value)}
                 autoFocus
@@ -452,21 +628,21 @@ function App() {
       </button>
 
       {/* Left Sidebar Queue */}
-      <ProfileQueue 
-        queue={queue} 
-        setQueue={setQueue} 
-        history={history} 
-        fetchHistory={fetchHistory} 
+      <ProfileQueue
+        queue={queue}
+        setQueue={setQueue}
+        history={history}
+        fetchHistory={fetchHistory}
         playTrack={executePlay}
         hasPermission={hasPermission}
       />
 
       <header className="top-bar">
         <form onSubmit={handleSearchSubmit} className="search-form glass-panel">
-          <input 
-            type="text" 
+          <input
+            type="text"
             className="search-input"
-            placeholder={hasPermission ? "Paste YouTube Video or Playlist URL..." : "Only DJs can change the music..."} 
+            placeholder={hasPermission ? "Paste YouTube Video or Playlist URL..." : "Only DJs can change the music..."}
             value={url}
             onChange={(e) => setUrl(e.target.value)}
             disabled={!hasPermission}
@@ -476,11 +652,19 @@ function App() {
           </button>
         </form>
       </header>
-      
+
       {isLoading && (
         <div className="loading-overlay">
           <div className="loader large"></div>
           <p>Extracting Audio Stream...</p>
+        </div>
+      )}
+
+      {/* Crossfade indicator — visible only during active transition */}
+      {isCrossfading && (
+        <div className="crossfade-indicator glass-panel">
+          <span className="crossfade-dot" />
+          Crossfading...
         </div>
       )}
 
@@ -490,12 +674,12 @@ function App() {
         <div className="glass-panel player-wrapper">
           <div className="progress-container">
             <span className="time-text">{formatTime(currentTime)}</span>
-            <input 
-              type="range" 
-              min="0" 
-              max={duration || 100} 
+            <input
+              type="range"
+              min="0"
+              max={duration || 100}
               step="0.1"
-              value={currentTime} 
+              value={currentTime}
               onChange={handleSeek}
               className="progress-slider"
               disabled={!hasPermission && duration === 0}
@@ -504,20 +688,20 @@ function App() {
           </div>
 
           <div className="player-controls">
-            <button 
-              className={`control-btn main ${!hasPermission ? 'disabled' : ''}`} 
+            <button
+              className={`control-btn main ${!hasPermission ? 'disabled' : ''}`}
               onClick={togglePlay}
               title={hasPermission ? "Play / Pause for Room" : "Only DJs can pause the music"}
             >
               {isPlaying ? <Pause fill="currentColor" /> : <Play fill="currentColor" />}
             </button>
-            
+
             <div className="volume-control">
               <button className="control-btn" onClick={() => setVolume(volume === 0 ? 1 : 0)}>
                 {volume === 0 ? <VolumeX size={20} /> : <Volume2 size={20} />}
               </button>
-              <input 
-                type="range" min="0" max="1" step="0.01" 
+              <input
+                type="range" min="0" max="1" step="0.01"
                 value={volume} onChange={(e) => setVolume(parseFloat(e.target.value))}
                 className="volume-slider"
               />
@@ -526,10 +710,10 @@ function App() {
         </div>
       </footer>
 
-      <Chat 
-        messages={messages} 
-        sendMessage={sendMessage} 
-        clientId={clientId} 
+      <Chat
+        messages={messages}
+        sendMessage={sendMessage}
+        clientId={clientId}
         users={users}
         usernames={usernames}
         hostId={hostId}
