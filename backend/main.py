@@ -336,6 +336,7 @@ class Room:
         self.current_title: str = "Unknown Track"
         self.is_playing: bool = False
         self.usernames: Dict[str, str] = {}
+        self.queue: list = []
         
     async def broadcast(self, message: dict):
         for connection in self.connections.values():
@@ -372,7 +373,8 @@ class ConnectionManager:
             "is_playing": room.is_playing,
             "users_count": len(room.connections),
             "users": list(room.connections.keys()),
-            "usernames": room.usernames
+            "usernames": room.usernames,
+            "queue": room.queue
         }))
         await room.broadcast({
             "type": "user_joined",
@@ -443,11 +445,34 @@ class ConnectionManager:
         if client_id not in room.authorized_users:
             return 
             
+        if msg_type == "update_queue":
+            room.queue = message.get("queue", [])
+            await room.broadcast({"type": "update_queue", "queue": room.queue})
+            return
+
+        if msg_type == "dedication":
+            target = message.get("target")
+            title = message.get("title")
+            sender = room.usernames.get(client_id, f"User {client_id[:4]}")
+            # Broadcast as a system chat message
+            await room.broadcast({
+                "type": "chat",
+                "client_id": "system",
+                "text": f"🎁 {sender} dedicated '{title}' to {target} 💝!"
+            })
+            return
+            
         if msg_type == "load_url":
             room.current_url = message.get("url")
             room.current_title = message.get("title", "Unknown Track")
             room.is_playing = True
-            await room.broadcast({"type": "load_url", "url": room.current_url, "title": room.current_title, "client_id": client_id})
+            await room.broadcast({
+                "type": "load_url", 
+                "url": room.current_url, 
+                "title": room.current_title, 
+                "client_id": client_id,
+                "username": room.usernames.get(client_id)
+            })
         elif msg_type == "play":
             room.is_playing = True
             await room.broadcast({"type": "play", "client_id": client_id})
