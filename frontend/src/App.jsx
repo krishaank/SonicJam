@@ -26,7 +26,7 @@ function App() {
   const [volume, setVolume] = useState(1);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
-  const [isCrossfading, setIsCrossfading] = useState(false); // CROSSFADER
+  const [isCrossfading, setIsCrossfading] = useState(false);
 
   // Lyrics State
   const [showLyrics, setShowLyrics] = useState(false);
@@ -39,7 +39,7 @@ function App() {
   const [bottomDedicateOpen, setBottomDedicateOpen] = useState(false);
   
   // Mobile UI State
-  const [mobileView, setMobileView] = useState('none'); // 'none' | 'chat' | 'queue'
+  const [mobileView, setMobileView] = useState('none');
 
   // Auth & DB State
   const [token, setToken] = useState(localStorage.getItem('sonic_token'));
@@ -62,33 +62,48 @@ function App() {
   const [authorizedUsers, setAuthorizedUsers] = useState([]);
 
   // --- Audio Refs ---
-  const audioRef = useRef(null);   // Deck A (active)
-  const audioRef2 = useRef(null);  // Deck B (crossfade preload) — CROSSFADER
+  // audioRef = currently active deck (main player)
+  // audioRef2 = standby deck (preloads next track)
+  // activeRef always points to whichever is currently "main"
+  const audioRef = useRef(null);
+  const audioRef2 = useRef(null);
+  const activeRef = useRef(null);   // points to the currently active audio element
+  const standbyRef = useRef(null);  // points to the standby audio element
+
   const audioContextRef = useRef(null);
   const analyzerRef = useRef(null);
-  const gainNode1Ref = useRef(null); // CROSSFADER
-  const gainNode2Ref = useRef(null); // CROSSFADER
-  const source1Ref = useRef(null);   // CROSSFADER
-  const source2Ref = useRef(null);   // CROSSFADER
-  const crossfadeTriggeredRef = useRef(false); // CROSSFADER
+  const gainNode1Ref = useRef(null); // gain for audioRef
+  const gainNode2Ref = useRef(null); // gain for audioRef2
+  const source1Ref = useRef(null);
+  const source2Ref = useRef(null);
+  const crossfadeTriggeredRef = useRef(false);
 
-  // Ref mirrors to avoid stale closures in event listeners — CROSSFADER
+  // Ref mirrors to avoid stale closures
   const queueRef = useRef([]);
   const wsRef = useRef(null);
   const hasPermissionRef = useRef(false);
+  const volumeRef = useRef(1);
 
-  // Check if current user has control permissions
   const hasPermission = authorizedUsers.includes(clientId);
 
-  // Keep refs in sync
   useEffect(() => { hasPermissionRef.current = hasPermission; }, [hasPermission]);
   useEffect(() => { queueRef.current = queue; }, [queue]);
   useEffect(() => { wsRef.current = ws; }, [ws]);
+  useEffect(() => { volumeRef.current = volume; }, [volume]);
 
-  // Sync volume to active gain node — CROSSFADER
+  // After refs are mounted, initialise activeRef and standbyRef
+  useEffect(() => {
+    activeRef.current = audioRef.current;
+    standbyRef.current = audioRef2.current;
+  }, []);
+
+  // Sync volume to active gain node only
   useEffect(() => {
     if (gainNode1Ref.current && !isCrossfading) {
-      gainNode1Ref.current.gain.value = volume;
+      // gainNode1 is always wired to audioRef, gainNode2 to audioRef2
+      // The "active" gain node is whichever deck activeRef points to
+      const activeGain = activeRef.current === audioRef.current ? gainNode1Ref.current : gainNode2Ref.current;
+      activeGain.gain.value = volume;
     }
   }, [volume, isCrossfading]);
 
@@ -111,7 +126,6 @@ function App() {
     setHistory([]);
   };
 
-  // Fetch History
   const fetchHistory = async (currentToken = token) => {
     if (!currentToken) return;
     try {
@@ -127,7 +141,6 @@ function App() {
     }
   };
 
-  // Log to History
   const logHistory = async (trackUrl, trackTitle) => {
     if (!token) return;
     try {
@@ -196,14 +209,13 @@ function App() {
     });
   };
 
-  // Sync local volume state to the audio element
+  // Sync volume to the audio element (legacy, kept for non-WebAudio path)
   useEffect(() => {
-    if (audioRef.current) {
-      audioRef.current.volume = volume;
-    }
+    if (audioRef.current) audioRef.current.volume = volume;
+    if (audioRef2.current) audioRef2.current.volume = volume;
   }, [volume]);
 
-  // --- Web Audio Init (CROSSFADER: now wires TWO decks through GainNodes) ---
+  // --- Web Audio Init ---
   const initAudio = useCallback(() => {
     const AudioContext = window.AudioContext || window.webkitAudioContext;
 
@@ -214,24 +226,20 @@ function App() {
       analyzerRef.current.smoothingTimeConstant = 0.8;
       analyzerRef.current.connect(audioContextRef.current.destination);
 
-      // Gain node for deck A
       gainNode1Ref.current = audioContextRef.current.createGain();
       gainNode1Ref.current.gain.value = volume;
       gainNode1Ref.current.connect(analyzerRef.current);
 
-      // Gain node for deck B (starts silent)
       gainNode2Ref.current = audioContextRef.current.createGain();
-      gainNode2Ref.current.gain.value = 0;
+      gainNode2Ref.current.gain.value = 0; // standby starts silent
       gainNode2Ref.current.connect(analyzerRef.current);
     }
 
-    // Wire deck A (created only once)
     if (!source1Ref.current && audioRef.current) {
       source1Ref.current = audioContextRef.current.createMediaElementSource(audioRef.current);
       source1Ref.current.connect(gainNode1Ref.current);
     }
 
-    // Wire deck B (created only once)
     if (!source2Ref.current && audioRef2.current) {
       source2Ref.current = audioContextRef.current.createMediaElementSource(audioRef2.current);
       source2Ref.current.connect(gainNode2Ref.current);
@@ -242,50 +250,59 @@ function App() {
     }
   }, [volume]);
 
-  // --- Crossfade Logic (CROSSFADER) ---
+  // --- Crossfade Logic (partner's approach: flip tracker, never interrupt active stream) ---
   const triggerCrossfade = useCallback((nextTrackUrl, nextTrackTitle) => {
     const ctx = audioContextRef.current;
-    const gainA = gainNode1Ref.current;
-    const gainB = gainNode2Ref.current;
-    const deckB = audioRef2.current;
+    if (!ctx) return;
 
-    if (!ctx || !gainA || !gainB || !deckB) return;
+    // Identify which gain node belongs to active vs standby
+    const activeGain = activeRef.current === audioRef.current ? gainNode1Ref.current : gainNode2Ref.current;
+    const standbyGain = standbyRef.current === audioRef.current ? gainNode1Ref.current : gainNode2Ref.current;
+    const standbyDeck = standbyRef.current;
+
+    if (!activeGain || !standbyGain || !standbyDeck) return;
 
     setIsCrossfading(true);
 
-    // Load and start next track silently on deck B
+    // Load next track on standby deck and start it playing (it's silent via gain=0)
     const streamEndpoint = `${BACKEND_URL}/api/stream?url=${encodeURIComponent(nextTrackUrl)}`;
-    deckB.src = streamEndpoint;
-    deckB.load();
-    deckB.play().catch(e => console.warn('Deck B autoplay blocked:', e));
+    standbyDeck.src = streamEndpoint;
+    standbyDeck.load();
+    standbyDeck.play().catch(e => console.warn('Standby deck autoplay blocked:', e));
 
-    // Schedule gain ramps — sample-accurate, no glitches
+    // Schedule crossfade ramps
     const now = ctx.currentTime;
     const fadeEnd = now + CROSSFADE_DURATION;
 
-    gainA.gain.cancelScheduledValues(now);
-    gainA.gain.setValueAtTime(gainA.gain.value, now);
-    gainA.gain.linearRampToValueAtTime(0, fadeEnd);
+    // Active deck fades OUT
+    activeGain.gain.cancelScheduledValues(now);
+    activeGain.gain.setValueAtTime(activeGain.gain.value, now);
+    activeGain.gain.linearRampToValueAtTime(0, fadeEnd);
 
-    gainB.gain.cancelScheduledValues(now);
-    gainB.gain.setValueAtTime(0, now);
-    gainB.gain.linearRampToValueAtTime(volume, fadeEnd);
+    // Standby deck fades IN
+    standbyGain.gain.cancelScheduledValues(now);
+    standbyGain.gain.setValueAtTime(0, now);
+    standbyGain.gain.linearRampToValueAtTime(volumeRef.current, fadeEnd);
 
-    // After fade completes: swap decks
     setTimeout(() => {
-      if (audioRef.current) {
-        audioRef.current.pause();
-        audioRef.current.src = '';
-      }
-      if (audioRef.current && audioRef2.current) {
-        audioRef.current.src = audioRef2.current.src;
-        audioRef2.current.src = '';
-      }
+      const ctx2 = audioContextRef.current;
 
-      gainA.gain.cancelScheduledValues(ctx.currentTime);
-      gainA.gain.setValueAtTime(volume, ctx.currentTime);
-      gainB.gain.cancelScheduledValues(ctx.currentTime);
-      gainB.gain.setValueAtTime(0, ctx.currentTime);
+      // Step 1: pause and clear the OLD active deck (stream is done, standby is now main)
+      const oldActive = activeRef.current;
+      oldActive.pause();
+      oldActive.src = '';
+
+      // Step 2: reset its gain to 0 so it's clean for next time
+      activeGain.gain.cancelScheduledValues(ctx2.currentTime);
+      activeGain.gain.setValueAtTime(0, ctx2.currentTime);
+
+      // Step 3: make sure standby gain is locked at full volume
+      standbyGain.gain.cancelScheduledValues(ctx2.currentTime);
+      standbyGain.gain.setValueAtTime(volumeRef.current, ctx2.currentTime);
+
+      // Step 4: FLIP the tracker — standby becomes active, old active becomes new standby
+      activeRef.current = standbyRef.current;
+      standbyRef.current = oldActive;
 
       crossfadeTriggeredRef.current = false;
       setIsCrossfading(false);
@@ -298,9 +315,10 @@ function App() {
 
   // Auto-play next in queue + crossfade trigger
   useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio) return;
-    
+    const audio1 = audioRef.current;
+    const audio2 = audioRef2.current;
+    if (!audio1 || !audio2) return;
+
     const handleEnded = () => {
       setIsPlaying(false);
       crossfadeTriggeredRef.current = false;
@@ -314,15 +332,18 @@ function App() {
     };
 
     const handleTimeUpdate = () => {
-      const timeLeft = audio.duration - audio.currentTime;
-      setCurrentTime(audio.currentTime);
+      // Always read from whichever deck is currently active
+      const activeDeck = activeRef.current;
+      if (!activeDeck) return;
 
-      // Trigger crossfade when approaching end of track — CROSSFADER
+      const timeLeft = activeDeck.duration - activeDeck.currentTime;
+      setCurrentTime(activeDeck.currentTime);
+
       if (
         hasPermissionRef.current &&
         queueRef.current.length > 0 &&
-        !isNaN(audio.duration) &&
-        audio.duration > 0 &&
+        !isNaN(activeDeck.duration) &&
+        activeDeck.duration > 0 &&
         timeLeft <= CROSSFADE_DURATION &&
         timeLeft > 0 &&
         !crossfadeTriggeredRef.current
@@ -343,16 +364,25 @@ function App() {
       }
     };
 
-    const updateDuration = () => setDuration(audio.duration);
-    
-    audio.addEventListener('ended', handleEnded);
-    audio.addEventListener('timeupdate', handleTimeUpdate);
-    audio.addEventListener('loadedmetadata', updateDuration);
-    
+    const updateDuration = () => {
+      if (activeRef.current) setDuration(activeRef.current.duration);
+    };
+
+    // Attach to both decks so whichever is active gets picked up
+    audio1.addEventListener('ended', handleEnded);
+    audio2.addEventListener('ended', handleEnded);
+    audio1.addEventListener('timeupdate', handleTimeUpdate);
+    audio2.addEventListener('timeupdate', handleTimeUpdate);
+    audio1.addEventListener('loadedmetadata', updateDuration);
+    audio2.addEventListener('loadedmetadata', updateDuration);
+
     return () => {
-      audio.removeEventListener('ended', handleEnded);
-      audio.removeEventListener('timeupdate', handleTimeUpdate);
-      audio.removeEventListener('loadedmetadata', updateDuration);
+      audio1.removeEventListener('ended', handleEnded);
+      audio2.removeEventListener('ended', handleEnded);
+      audio1.removeEventListener('timeupdate', handleTimeUpdate);
+      audio2.removeEventListener('timeupdate', handleTimeUpdate);
+      audio1.removeEventListener('loadedmetadata', updateDuration);
+      audio2.removeEventListener('loadedmetadata', updateDuration);
     };
   }, [triggerCrossfade]);
 
@@ -381,9 +411,7 @@ function App() {
           setUsernames(data.usernames || {});
           setQueue(data.queue || []);
           if (data.current_title) setCurrentTitle(data.current_title);
-          if (data.current_url) {
-             playStream(data.current_url, data.is_playing);
-          }
+          if (data.current_url) playStream(data.current_url, data.is_playing);
           break;
         case 'update_queue':
           setQueue(data.queue || []);
@@ -392,7 +420,7 @@ function App() {
           setUsers(data.users);
           setUsernames(data.usernames || {});
           if (data.client_id !== clientId) {
-             addSystemMessage(`${data.usernames?.[data.client_id] || 'User ' + data.client_id.substring(0,4)} joined the jam.`);
+            addSystemMessage(`${data.usernames?.[data.client_id] || 'User ' + data.client_id.substring(0,4)} joined the jam.`);
           }
           break;
         case 'user_left':
@@ -414,22 +442,22 @@ function App() {
           break;
         case 'load_url':
           setCurrentTitle(data.title);
-          crossfadeTriggeredRef.current = false; // CROSSFADER: reset on new track
+          crossfadeTriggeredRef.current = false;
           playStream(data.url, true);
           logHistory(data.url, data.title);
           addSystemMessage(`${data.username || 'User ' + data.client_id.substring(0,4)} dropped a new track!`);
           break;
         case 'play':
-          audioRef.current?.play()
+          activeRef.current?.play()
             .then(() => setIsPlaying(true))
             .catch(e => console.error("Auto-play blocked:", e));
           break;
         case 'pause':
-          audioRef.current?.pause();
+          activeRef.current?.pause();
           setIsPlaying(false);
           break;
         case 'seek':
-          if (audioRef.current) audioRef.current.currentTime = data.time;
+          if (activeRef.current) activeRef.current.currentTime = data.time;
           break;
         default:
           break;
@@ -437,13 +465,9 @@ function App() {
     };
 
     setWs(websocket);
-
-    return () => {
-      websocket.close();
-    };
+    return () => websocket.close();
   }, [clientId, hasEntered]);
 
-  // Broadcast profile update when username changes without reconnecting
   useEffect(() => {
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'update_profile', username }));
@@ -460,33 +484,29 @@ function App() {
     }
   };
 
+  // playStream always loads onto the active deck
   const playStream = async (streamUrl, startPlaying = true) => {
     setError('');
     setIsLoading(true);
     initAudio();
-    crossfadeTriggeredRef.current = false; // CROSSFADER: reset on direct load
+    crossfadeTriggeredRef.current = false;
 
     try {
       const streamEndpoint = `${BACKEND_URL}/api/stream?url=${encodeURIComponent(streamUrl)}`;
-      
-      if (audioRef.current) {
-        audioRef.current.src = streamEndpoint;
-        audioRef.current.load();
-        
+      const deck = activeRef.current || audioRef.current;
+
+      if (deck) {
+        deck.src = streamEndpoint;
+        deck.load();
+
         if (startPlaying) {
-          const playPromise = audioRef.current.play();
-          if (playPromise !== undefined) {
-            playPromise
-              .then(() => {
-                setIsPlaying(true);
-                setIsLoading(false);
-              })
-              .catch(err => {
-                console.error("Autoplay prevented:", err);
-                setError("Click Play to tune in to the jam.");
-                setIsLoading(false);
-              });
-          }
+          deck.play()
+            .then(() => { setIsPlaying(true); setIsLoading(false); })
+            .catch(err => {
+              console.error("Autoplay prevented:", err);
+              setError("Click Play to tune in to the jam.");
+              setIsLoading(false);
+            });
         } else {
           setIsLoading(false);
         }
@@ -498,7 +518,6 @@ function App() {
     }
   };
 
-  // Play Playlist or Track directly
   const executePlay = (trackUrl, trackTitle) => {
     if (ws?.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'load_url', url: trackUrl, title: trackTitle }));
@@ -508,12 +527,11 @@ function App() {
   const handleSearchSubmit = async (e) => {
     e?.preventDefault();
     if (!url || !hasPermission) return;
-    
     setIsLoading(true);
     try {
       const res = await fetch(`${BACKEND_URL}/api/playlist?url=${encodeURIComponent(url)}`);
       const data = await res.json();
-      
+
       let trackToPlay = null;
       if (data.is_playlist) {
         if (data.tracks && data.tracks.length > 0) {
@@ -529,10 +547,7 @@ function App() {
           setError("Could not find any playable tracks.");
         }
       }
-      
-      if (trackToPlay) {
-         executePlay(trackToPlay.url, trackToPlay.title);
-      }
+      if (trackToPlay) executePlay(trackToPlay.url, trackToPlay.title);
     } catch (err) {
       setError("Failed to load track or playlist.");
     } finally {
@@ -551,8 +566,9 @@ function App() {
   };
 
   const togglePlay = () => {
-    if (!audioRef.current || !audioRef.current.src) return;
-    
+    const deck = activeRef.current;
+    if (!deck || !deck.src) return;
+
     if (hasPermission) {
       if (isPlaying) {
         ws?.send(JSON.stringify({ type: 'pause' }));
@@ -562,23 +578,21 @@ function App() {
       }
     } else {
       if (isPlaying) {
-        audioRef.current.pause();
+        deck.pause();
         setIsPlaying(false);
       } else {
         initAudio();
-        audioRef.current.play().then(() => setIsPlaying(true)).catch(console.error);
+        deck.play().then(() => setIsPlaying(true)).catch(console.error);
       }
     }
   };
 
   const handleSeek = (e) => {
     const time = parseFloat(e.target.value);
-    if (audioRef.current) {
-      audioRef.current.currentTime = time;
-    }
+    if (activeRef.current) activeRef.current.currentTime = time;
     setCurrentTime(time);
-    crossfadeTriggeredRef.current = false; // CROSSFADER: reset on seek
-    
+    crossfadeTriggeredRef.current = false;
+
     if (hasPermission && ws?.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'seek', time }));
     }
@@ -642,9 +656,8 @@ function App() {
       />
 
       <audio ref={audioRef} crossOrigin="anonymous" />
-      <audio ref={audioRef2} crossOrigin="anonymous" /> {/* CROSSFADER: deck B */}
+      <audio ref={audioRef2} crossOrigin="anonymous" />
 
-      {/* Crossfade indicator — CROSSFADER */}
       {isCrossfading && (
         <div className="crossfade-indicator glass-panel">
           <span className="crossfade-dot" />
