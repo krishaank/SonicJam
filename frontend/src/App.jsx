@@ -319,7 +319,12 @@ function App() {
     const audio2 = audioRef2.current;
     if (!audio1 || !audio2) return;
 
-    const handleEnded = () => {
+    const handleEnded = (e) => {
+      // Ignore background deck
+      if (e.target !== activeRef.current) return;
+      // If we are crossfading, ignore the natural end of the track to prevent double-skips
+      if (crossfadeTriggeredRef.current) return;
+
       setIsPlaying(false);
       crossfadeTriggeredRef.current = false;
       if (hasPermissionRef.current && queueRef.current.length > 0) {
@@ -354,13 +359,11 @@ function App() {
 
         if (wsRef.current?.readyState === WebSocket.OPEN) {
           wsRef.current.send(JSON.stringify({
-            type: 'load_url',
+            type: 'crossfade',
             url: nextTrack.url,
             title: nextTrack.title
           }));
         }
-
-        triggerCrossfade(nextTrack.url, nextTrack.title);
       }
     };
 
@@ -446,6 +449,10 @@ function App() {
           playStream(data.url, true);
           logHistory(data.url, data.title);
           addSystemMessage(`${data.username || 'User ' + data.client_id.substring(0,4)} dropped a new track!`);
+          break;
+        case 'crossfade':
+          // Listeners and DJ both receive this: fade in background without loader
+          triggerCrossfade(data.url, data.title);
           break;
         case 'play':
           activeRef.current?.play()
