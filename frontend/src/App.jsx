@@ -16,7 +16,7 @@ const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
 const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:8000';
 
 // How many seconds before the end of a track to begin the crossfade
-const CROSSFADE_DURATION = 5;
+const CROSSFADE_DURATION = 10;
 
 function App() {
   const [url, setUrl] = useState('');
@@ -259,58 +259,77 @@ function App() {
     const activeGain = activeRef.current === audioRef.current ? gainNode1Ref.current : gainNode2Ref.current;
     const standbyGain = standbyRef.current === audioRef.current ? gainNode1Ref.current : gainNode2Ref.current;
     const standbyDeck = standbyRef.current;
+    const currentActiveDeck = activeRef.current;
 
-    if (!activeGain || !standbyGain || !standbyDeck) return;
+    if (!activeGain || !standbyGain || !standbyDeck || !currentActiveDeck) return;
 
     setIsCrossfading(true);
 
-    // Load next track on standby deck and start it playing (it's silent via gain=0)
+    // Prepare standby deck
     const streamEndpoint = `${BACKEND_URL}/api/stream?url=${encodeURIComponent(nextTrackUrl)}`;
     standbyDeck.src = streamEndpoint;
     standbyDeck.load();
-    standbyDeck.play().catch(e => console.warn('Standby deck autoplay blocked:', e));
+    
+    // Wait for the next track to actually buffer before we start fading!
+    const handlePlaying = () => {
+      standbyDeck.removeEventListener('playing', handlePlaying);
 
-    // Schedule crossfade ramps
-    const now = ctx.currentTime;
-    const fadeEnd = now + CROSSFADE_DURATION;
+      const now = ctx.currentTime;
+      // Calculate how much time we actually have left before the active track ends naturally
+      const actualTimeLeft = currentActiveDeck.duration - currentActiveDeck.currentTime;
+      // Don't fade longer than the time we have left, but guarantee at least a 0.5 second fade
+      const actualFadeDuration = Math.max(0.5, Math.min(CROSSFADE_DURATION, actualTimeLeft));
+      const fadeEnd = now + actualFadeDuration;
 
-    // Active deck fades OUT
-    activeGain.gain.cancelScheduledValues(now);
-    activeGain.gain.setValueAtTime(activeGain.gain.value, now);
-    activeGain.gain.linearRampToValueAtTime(0, fadeEnd);
+      // Active deck fades OUT
+      activeGain.gain.cancelScheduledValues(now);
+      activeGain.gain.setValueAtTime(activeGain.gain.value, now);
+      activeGain.gain.linearRampToValueAtTime(0, fadeEnd);
 
-    // Standby deck fades IN
-    standbyGain.gain.cancelScheduledValues(now);
-    standbyGain.gain.setValueAtTime(0, now);
-    standbyGain.gain.linearRampToValueAtTime(volumeRef.current, fadeEnd);
+      // Standby deck fades IN
+      standbyGain.gain.cancelScheduledValues(now);
+      standbyGain.gain.setValueAtTime(0, now);
+      standbyGain.gain.linearRampToValueAtTime(volumeRef.current, fadeEnd);
 
-    setTimeout(() => {
-      const ctx2 = audioContextRef.current;
+      // FLIP THE TRACKER IMMEDIATELY
+      activeRef.current = standbyDeck;
+      standbyRef.current = currentActiveDeck;
 
-      // Step 1: pause and clear the OLD active deck (stream is done, standby is now main)
-      const oldActive = activeRef.current;
-      oldActive.pause();
-      oldActive.src = '';
-
-      // Step 2: reset its gain to 0 so it's clean for next time
-      activeGain.gain.cancelScheduledValues(ctx2.currentTime);
-      activeGain.gain.setValueAtTime(0, ctx2.currentTime);
-
-      // Step 3: make sure standby gain is locked at full volume
-      standbyGain.gain.cancelScheduledValues(ctx2.currentTime);
-      standbyGain.gain.setValueAtTime(volumeRef.current, ctx2.currentTime);
-
-      // Step 4: FLIP the tracker — standby becomes active, old active becomes new standby
-      activeRef.current = standbyRef.current;
-      standbyRef.current = oldActive;
-
-      crossfadeTriggeredRef.current = false;
-      setIsCrossfading(false);
-      setIsPlaying(true);
+      // Update UI state immediately to match the new track
       setCurrentTitle(nextTrackTitle || '');
+      setDuration(standbyDeck.duration || 0);
+      crossfadeTriggeredRef.current = false; // Safe to reset since activeRef is now the new 3-minute track!
+      
       logHistory(nextTrackUrl, nextTrackTitle);
       addSystemMessage(`🎛️ Crossfaded into next track!`);
-    }, CROSSFADE_DURATION * 1000);
+
+      setTimeout(() => {
+        const ctx2 = audioContextRef.current;
+
+        // Step 1: pause and clear the OLD active deck
+        currentActiveDeck.pause();
+        currentActiveDeck.src = '';
+
+        // Step 2: reset its gain to 0
+        activeGain.gain.cancelScheduledValues(ctx2.currentTime);
+        activeGain.gain.setValueAtTime(0, ctx2.currentTime);
+
+        // Step 3: lock standby gain at full volume
+        standbyGain.gain.cancelScheduledValues(ctx2.currentTime);
+        standbyGain.gain.setValueAtTime(volumeRef.current, ctx2.currentTime);
+
+        setIsCrossfading(false);
+      }, actualFadeDuration * 1000);
+    };
+
+    standbyDeck.addEventListener('playing', handlePlaying);
+    
+    // Call play() IMMEDIATELY so the browser is forced to buffer the stream.
+    // It will be silent because the standbyGain is initialized to 0!
+    standbyDeck.play().catch(e => {
+      console.warn('Standby deck autoplay blocked:', e);
+      standbyDeck.removeEventListener('playing', handlePlaying);
+    });
   }, [volume]);
 
   // Auto-play next in queue + crossfade trigger
@@ -367,8 +386,8 @@ function App() {
       }
     };
 
-    const updateDuration = () => {
-      if (activeRef.current) setDuration(activeRef.current.duration);
+    const updateDuration = (e) => {
+      if (e.target === activeRef.current) setDuration(e.target.duration);
     };
 
     // Attach to both decks so whichever is active gets picked up
